@@ -14,9 +14,17 @@ import "./styles.css";
 
 type HealthState = "loading" | "ok" | "failed";
 type Severity = "info" | "warning" | "critical" | "unknown";
-type ServiceName = "Zoom API" | "Meetings" | "Media UDP" | "Chat";
 type LoadState = "loading" | "ready" | "failed";
 type MonitoringState = "app_problem" | "no_data" | "healthy" | "degraded" | "critical";
+type MatrixCell = {
+  severity: Severity;
+  checks: number;
+  endpoint: string;
+};
+type MatrixRow = {
+  location: string;
+  services: Record<string, MatrixCell>;
+};
 
 type ChainStepResult = {
   step: string;
@@ -85,8 +93,6 @@ type StatusOverview = {
   incidents: Incident[];
   diagnostic_conclusions: DiagnosticConclusion[];
 };
-
-const serviceNames: ServiceName[] = ["Zoom API", "Meetings", "Media UDP", "Chat"];
 
 function App() {
   const [health, setHealth] = React.useState<HealthState>("loading");
@@ -175,7 +181,11 @@ function App() {
 
       <div className="dashboard-layout">
         <section className="panel" aria-label="Матрица статусов">
-          <PanelTitle icon={<Signal />} title="Матрица статусов" />
+          <PanelTitle icon={<Signal />} title="Сводка по сервисам и локациям" />
+          <p className="panel-note">
+            Это не отдельная проверка. Здесь агрегируются последние check results: строка - локация,
+            колонка - сервис/endpoint group, ячейка - худший статус проверок DNS/TCP/TLS/HTTP.
+          </p>
           <StatusMatrix rows={matrixData} />
         </section>
 
@@ -252,14 +262,25 @@ function PanelTitle({ icon, title }: { icon: React.ReactNode; title: string }) {
   );
 }
 
-function StatusMatrix({ rows }: { rows: Array<{ location: string; services: Record<ServiceName, Severity> }> }) {
+function StatusMatrix({ rows }: { rows: MatrixRow[] }) {
+  const columns = matrixColumns(rows);
+
+  if (columns.length === 0) {
+    return (
+      <div className="empty-state">
+        <strong>Данных мониторинга пока нет</strong>
+        <span>Запустите агент: .venv/bin/python -m agent.main run-service-pack --pack zoom --submit</span>
+      </div>
+    );
+  }
+
   return (
     <div className="matrix-wrap">
       <table className="matrix">
         <thead>
           <tr>
             <th>Локация</th>
-            {serviceNames.map((service) => (
+            {columns.map((service) => (
               <th key={service}>{service}</th>
             ))}
           </tr>
@@ -268,10 +289,20 @@ function StatusMatrix({ rows }: { rows: Array<{ location: string; services: Reco
           {rows.map((row) => (
             <tr key={row.location}>
               <th>{row.location}</th>
-              {serviceNames.map((service) => (
+              {columns.map((service) => (
                 <td key={service}>
-                  <span className={`status-dot status-dot--${row.services[service]}`} />
-                  {labelFor(row.services[service])}
+                  {row.services[service] ? (
+                    <div className="matrix-cell">
+                      <span>
+                        <span className={`status-dot status-dot--${row.services[service].severity}`} />
+                        {labelFor(row.services[service].severity)}
+                      </span>
+                      <small>{row.services[service].endpoint}</small>
+                      <small>{row.services[service].checks} checks</small>
+                    </div>
+                  ) : (
+                    <span className="muted">не проверялось</span>
+                  )}
                 </td>
               ))}
             </tr>
@@ -377,7 +408,6 @@ function buildDisplayedChain(results: CheckResult[], overview: StatusOverview | 
   }
 
   const representative = results[0];
-  const resultByType = new Map(results.map((result) => [result.check_type, result]));
   const stepCandidates = new Map<string, Array<{ step: ChainStepResult; result: CheckResult }>>();
 
   for (const result of results) {
@@ -451,36 +481,33 @@ function buildDisplayedChain(results: CheckResult[], overview: StatusOverview | 
 
 function buildMatrixRows(overview: StatusOverview | null) {
   if (!overview || overview.latest_results.length === 0) {
-    return [
-      {
-        location: "нет данных",
-        services: {
-          "Zoom API": "unknown",
-          Meetings: "unknown",
-          "Media UDP": "unknown",
-          Chat: "unknown",
-        } satisfies Record<ServiceName, Severity>,
-      },
-    ];
+    return [];
   }
 
-  const rows = new Map<string, Record<ServiceName, Severity>>();
+  const rows = new Map<string, MatrixRow>();
   for (const result of overview.latest_results) {
     const location = result.location_id || "unknown";
     const current =
       rows.get(location) ??
       ({
-        "Zoom API": "unknown",
-        Meetings: "unknown",
-        "Media UDP": "unknown",
-        Chat: "unknown",
-      } satisfies Record<ServiceName, Severity>);
+        location,
+        services: {},
+      } satisfies MatrixRow);
     const service = serviceNameFor(result.service_id);
-    current[service] = worstSeverity(current[service], result.severity);
+    const previous = current.services[service];
+    current.services[service] = {
+      severity: previous ? worstSeverity(previous.severity, result.severity) : result.severity,
+      checks: (previous?.checks ?? 0) + 1,
+      endpoint: endpointAddress(result) ?? result.endpoint_group_id ?? result.service_id,
+    };
     rows.set(location, current);
   }
 
-  return Array.from(rows.entries()).map(([location, services]) => ({ location, services }));
+  return Array.from(rows.values());
+}
+
+function matrixColumns(rows: MatrixRow[]) {
+  return Array.from(new Set(rows.flatMap((row) => Object.keys(row.services))));
 }
 
 function buildEvidenceFacts(
@@ -582,7 +609,7 @@ function endpointAddress(result: CheckResult) {
   return result.endpoint_port ? `${result.endpoint_host}:${result.endpoint_port}` : result.endpoint_host;
 }
 
-function serviceNameFor(serviceId: string): ServiceName {
+function serviceNameFor(serviceId: string): string {
   if (serviceId.includes("media")) {
     return "Media UDP";
   }

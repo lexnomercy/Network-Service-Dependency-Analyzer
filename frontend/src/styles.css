@@ -163,6 +163,27 @@ h2 {
   margin-bottom: 0;
 }
 
+.panel-note {
+  margin-bottom: 16px;
+  color: #52636d;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.empty-state {
+  display: grid;
+  gap: 6px;
+  padding: 16px;
+  border: 1px dashed #c9d4d9;
+  border-radius: 8px;
+  background: #f8fafb;
+}
+
+.empty-state span,
+.muted {
+  color: #667780;
+}
+
 .chain {
   display: grid;
   grid-template-columns: repeat(9, minmax(88px, 1fr));
@@ -265,6 +286,16 @@ h2 {
   height: 10px;
   margin-right: 8px;
   border-radius: 50%;
+}
+
+.matrix-cell {
+  display: grid;
+  gap: 3px;
+}
+
+.matrix-cell small {
+  color: #5d6f78;
+  overflow-wrap: anywhere;
 }
 
 .conclusion {
