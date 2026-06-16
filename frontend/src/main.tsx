@@ -16,6 +16,7 @@ type HealthState = "loading" | "ok" | "failed";
 type Severity = "info" | "warning" | "critical" | "unknown";
 type ServiceName = "Zoom API" | "Meetings" | "Media UDP" | "Chat";
 type LoadState = "loading" | "ready" | "failed";
+type MonitoringState = "app_problem" | "no_data" | "healthy" | "degraded" | "critical";
 
 type ChainStepResult = {
   step: string;
@@ -87,55 +88,6 @@ type StatusOverview = {
 
 const serviceNames: ServiceName[] = ["Zoom API", "Meetings", "Media UDP", "Chat"];
 
-const matrixRows = [
-  {
-    location: "Office MSK",
-    services: {
-      "Zoom API": "info",
-      Meetings: "critical",
-      "Media UDP": "warning",
-      Chat: "warning",
-    },
-  },
-  {
-    location: "Office SPB",
-    services: {
-      "Zoom API": "info",
-      Meetings: "info",
-      "Media UDP": "warning",
-      Chat: "info",
-    },
-  },
-  {
-    location: "Cloud EU",
-    services: {
-      "Zoom API": "info",
-      Meetings: "info",
-      "Media UDP": "info",
-      Chat: "info",
-    },
-  },
-] satisfies Array<{ location: string; services: Record<ServiceName, Severity> }>;
-
-const chainSteps = [
-  { name: "Agent", severity: "info", detail: "office-msk-01 online" },
-  { name: "LAN", severity: "info", detail: "gateway reachable" },
-  { name: "DNS", severity: "info", detail: "zoom.us resolved" },
-  { name: "Firewall/NAT", severity: "critical", detail: "TCP/443 timeout" },
-  { name: "Internet Route", severity: "unknown", detail: "blocked by firewall_nat" },
-  { name: "Zoom Edge", severity: "unknown", detail: "not reached" },
-  { name: "Core Service", severity: "unknown", detail: "not confirmed" },
-  { name: "Dependent Service", severity: "unknown", detail: "meeting signaling affected" },
-  { name: "Journey", severity: "critical", detail: "Join Meeting failed" },
-] satisfies Array<{ name: string; severity: Severity; detail: string }>;
-
-const evidence = [
-  "DNS succeeded from affected agents",
-  "TCP/443 timed out from Office MSK",
-  "Cloud EU agent reached the same endpoint",
-  "TLS and HTTP checks were skipped because TCP did not succeed",
-];
-
 function App() {
   const [health, setHealth] = React.useState<HealthState>("loading");
   const [overview, setOverview] = React.useState<StatusOverview | null>(null);
@@ -166,17 +118,18 @@ function App() {
       });
   }, []);
 
+  const endpointResults = selectEndpointResults(overview);
   const criticalResult = findCriticalResult(overview);
   const conclusion = overview?.diagnostic_conclusions[0] ?? null;
-  const displayedChain = buildDisplayedChain(criticalResult);
-  const displayedEvidence = conclusion?.evidence.map((item) => item.message) ?? evidence;
-const displayedActions = conclusion?.recommended_actions.length
+  const monitoringState = getMonitoringState(health, overviewState, overview);
+  const displayedChain = buildDisplayedChain(endpointResults, overview);
+  const displayedEvidence = buildEvidenceFacts(health, overviewState, overview, endpointResults, conclusion);
+  const displayedActions = conclusion?.recommended_actions.length
     ? conclusion.recommended_actions
     : [
-        "Проверьте outbound TCP/443 policy для Zoom endpoints.",
-        "Проверьте proxy authentication и bypass rules.",
-        "Сопоставьте firewall logs со временем failed check.",
-        "Запустите тот же check с другого agent в Office MSK.",
+        "Если нужно обновить данные, запустите: .venv/bin/python -m agent.main run-service-pack --pack zoom --submit",
+        "Если видите 'нет данных', проверьте что backend запущен и агент отправил результаты.",
+        "Если есть Critical, откройте проблемный узел в цепочке и проверьте его node_address.",
       ];
   const matrixData = buildMatrixRows(overview);
 
@@ -196,21 +149,21 @@ const displayedActions = conclusion?.recommended_actions.length
       <section className="status-grid" aria-label="Сводка статусов">
         <StatusTile
           icon={<Activity />}
-          label="Сервисы"
-          value={`${overview?.services_total ?? 4} под наблюдением`}
-          severity="info"
+          label="Состояние приложения"
+          value={health === "ok" ? "Backend отвечает" : "Backend недоступен"}
+          severity={health === "ok" ? "info" : "critical"}
         />
         <StatusTile
           icon={<MapPinned />}
-          label="Агенты"
-          value={`${overview?.agents_total ?? 0} зарегистрировано`}
-          severity={overview?.agents_total ? "info" : "unknown"}
+          label="Данные мониторинга"
+          value={overview?.latest_results.length ? `${overview.latest_results.length} checks получено` : "Нет check results"}
+          severity={overview?.latest_results.length ? "info" : "unknown"}
         />
         <StatusTile
           icon={<GitBranch />}
-          label="Результаты"
-          value={`${overview?.latest_results.length ?? displayedChain.length} последних`}
-          severity={criticalResult ? "warning" : "info"}
+          label="Проверенный endpoint"
+          value={endpointLabel(endpointResults)}
+          severity={endpointResults.length ? "info" : "unknown"}
         />
         <StatusTile
           icon={<AlertTriangle />}
@@ -227,19 +180,23 @@ const displayedActions = conclusion?.recommended_actions.length
         </section>
 
         <section className="panel" aria-label="Диагностический вывод">
-          <PanelTitle icon={<ShieldAlert />} title="Диагностический вывод" />
+          <PanelTitle icon={<ShieldAlert />} title="Что происходит" />
+          <div className={`state-banner state-banner--${monitoringState}`}>
+            <strong>{stateTitle(monitoringState)}</strong>
+            <span>{stateDescription(monitoringState, overview, endpointResults)}</span>
+          </div>
           <div className="conclusion">
             <div>
-              <p className="label">Вероятная причина</p>
-              <strong>{conclusion?.root_cause ?? "Corporate firewall"}</strong>
+              <p className="label">Источник проблемы</p>
+              <strong>{conclusion?.root_cause ?? sourceLabel(monitoringState)}</strong>
             </div>
             <div>
               <p className="label">Уверенность</p>
-              <strong>{formatConfidence(conclusion)}</strong>
+              <strong>{conclusion ? formatConfidence(conclusion) : confidenceLabel(monitoringState)}</strong>
             </div>
             <div>
               <p className="label">Влияние</p>
-              <strong>{titleCase(conclusion?.business_impact ?? "high")}</strong>
+              <strong>{conclusion ? titleCase(conclusion.business_impact) : impactLabel(monitoringState)}</strong>
             </div>
           </div>
           <p className="summary">
@@ -254,23 +211,27 @@ const displayedActions = conclusion?.recommended_actions.length
               <div className={`chain-step chain-step--${step.severity}`} key={step.name}>
                 <span className="dot" />
                 <span className="step-name">{step.name}</span>
+                <small className="step-address">Адрес: {step.address}</small>
                 <small>{step.detail}</small>
               </div>
             ))}
           </div>
         </section>
 
-        <section className="panel" aria-label="Доказательства">
-          <PanelTitle icon={<CheckCircle2 />} title="Доказательства" />
+        <section className="panel" aria-label="Факты проверки">
+          <PanelTitle icon={<CheckCircle2 />} title="Факты проверки" />
           <ul className="evidence-list">
             {displayedEvidence.map((item) => (
-              <li key={item}>{item}</li>
+              <li key={`${item.fact}-${item.proves}`}>
+                <strong>{item.fact}</strong>
+                <span>{item.proves}</span>
+              </li>
             ))}
           </ul>
         </section>
 
-        <section className="panel" aria-label="Рекомендуемые действия">
-          <PanelTitle icon={<TimerReset />} title="Рекомендуемые действия" />
+        <section className="panel" aria-label="Что делать дальше">
+          <PanelTitle icon={<TimerReset />} title="Что делать дальше" />
           <ol className="action-list">
             {displayedActions.map((action) => (
               <li key={action}>{action}</li>
@@ -348,7 +309,7 @@ function labelFor(severity: Severity) {
     info: "OK",
     warning: "Warn",
     critical: "Critical",
-    unknown: "Unknown",
+    unknown: "Нет данных",
   }[severity];
 }
 
@@ -364,11 +325,36 @@ function findCriticalResult(overview: StatusOverview | null): CheckResult | null
   );
 }
 
-function buildDisplayedChain(result: CheckResult | null) {
-  if (!result || result.chain.length === 0) {
-    return chainSteps;
+function selectEndpointResults(overview: StatusOverview | null): CheckResult[] {
+  if (!overview?.latest_results.length) {
+    return [];
   }
 
+  const groups = new Map<string, CheckResult[]>();
+  for (const result of overview.latest_results) {
+    const key = [
+      result.location_id,
+      result.service_id,
+      result.endpoint_group_id ?? "",
+      result.endpoint_host ?? "",
+      result.endpoint_port ?? "",
+      result.endpoint_path ?? "",
+    ].join("|");
+    const current = groups.get(key) ?? [];
+    current.push(result);
+    groups.set(key, current);
+  }
+
+  const allGroups = Array.from(groups.values());
+  return (
+    allGroups.find((group) => group.some((result) => result.severity === "critical")) ??
+    allGroups.find((group) => group.some((result) => result.severity === "warning")) ??
+    allGroups[0] ??
+    []
+  );
+}
+
+function buildDisplayedChain(results: CheckResult[], overview: StatusOverview | null) {
   const baseSteps = [
     "local_agent",
     "lan",
@@ -380,49 +366,102 @@ function buildDisplayedChain(result: CheckResult | null) {
     "dependent_service",
     "application_service",
   ];
-  const resultByStep = new Map(result.chain.map((step) => [step.step, step]));
+
+  if (results.length === 0) {
+    return baseSteps.map((step) => ({
+      name: chainLabel(step),
+      severity: step === "local_agent" && overview ? ("info" as Severity) : ("unknown" as Severity),
+      address: "нет данных",
+      detail: step === "local_agent" && overview ? "Backend работает, но агент еще не отправил checks" : "узел не проверялся",
+    }));
+  }
+
+  const representative = results[0];
+  const resultByType = new Map(results.map((result) => [result.check_type, result]));
+  const stepCandidates = new Map<string, Array<{ step: ChainStepResult; result: CheckResult }>>();
+
+  for (const result of results) {
+    for (const step of result.chain) {
+      const current = stepCandidates.get(step.step) ?? [];
+      current.push({ step, result });
+      stepCandidates.set(step.step, current);
+    }
+  }
+
   const failedIndex = baseSteps.findIndex((step) => {
-    const chainStep = resultByStep.get(step);
+    const chainStep = worstStep(stepCandidates.get(step));
     return chainStep?.severity === "critical" || chainStep?.status === "failed" || chainStep?.status === "timeout";
   });
 
   return baseSteps.map((step, index) => {
-    const chainStep = resultByStep.get(step);
-    if (chainStep) {
-      return {
-        name: chainLabel(step),
-        severity: chainStep.severity,
-        detail: chainStepDetail(chainStep, result),
-      };
-    }
-
-  if (failedIndex >= 0 && index > failedIndex) {
-      return {
-        name: chainLabel(step),
-        severity: "unknown" as Severity,
-        detail: `blocked after ${chainLabel(baseSteps[failedIndex])}`,
-      };
-    }
-
-    if (index < 2) {
+    if (step === "local_agent") {
       return {
         name: chainLabel(step),
         severity: "info" as Severity,
-        detail: "assumed reachable",
+        address: representative.agent_id,
+        detail: `Локация: ${representative.location_id}`,
+      };
+    }
+
+    if (step === "lan") {
+      return {
+        name: chainLabel(step),
+        severity: "unknown" as Severity,
+        address: "локальная сеть агента",
+        detail: "MVP не выполняет отдельную LAN-проверку",
+      };
+    }
+
+    const candidate = worstStepWithResult(stepCandidates.get(step));
+    if (candidate) {
+      return {
+        name: chainLabel(step),
+        severity: candidate.step.severity,
+        address: candidate.step.node_address ?? endpointAddress(candidate.result) ?? "нет адреса",
+        detail: chainStepDescription(candidate.step, candidate.result),
+      };
+    }
+
+    if (step === "core_service" || step === "dependent_service") {
+      return {
+        name: chainLabel(step),
+        severity: "unknown" as Severity,
+        address: endpointAddress(representative) ?? "нет адреса",
+        detail: "не проверяется текущим MVP без synthetic journey",
+      };
+    }
+
+    if (failedIndex >= 0 && index > failedIndex) {
+      return {
+        name: chainLabel(step),
+        severity: "unknown" as Severity,
+        address: endpointAddress(representative) ?? "нет адреса",
+        detail: `не проверялся, потому что раньше упал узел ${chainLabel(baseSteps[failedIndex])}`,
       };
     }
 
     return {
       name: chainLabel(step),
       severity: "unknown" as Severity,
-      detail: "not observed",
+      address: endpointAddress(representative) ?? "нет адреса",
+      detail: "нет результата для этого этапа",
     };
   });
 }
 
 function buildMatrixRows(overview: StatusOverview | null) {
   if (!overview || overview.latest_results.length === 0) {
-    return matrixRows;
+    return [
+      {
+        location: "нет данных",
+        services: {
+          "Zoom API": "unknown",
+          Meetings: "unknown",
+          "Media UDP": "unknown",
+          Chat: "unknown",
+        } satisfies Record<ServiceName, Severity>,
+      },
+    ];
   }
 
   const rows = new Map<string, Record<ServiceName, Severity>>();
@@ -444,10 +483,96 @@ function buildMatrixRows(overview: StatusOverview | null) {
   return Array.from(rows.entries()).map(([location, services]) => ({ location, services }));
 }
 
-function chainStepDetail(step: ChainStepResult, result: CheckResult) {
-  const address = step.node_address ?? endpointAddress(result);
-  const description = step.description ?? step.error_type ?? step.status;
-  return address ? `Узел: ${address}. ${description}` : description;
+function buildEvidenceFacts(
+  health: HealthState,
+  state: LoadState,
+  overview: StatusOverview | null,
+  results: CheckResult[],
+  conclusion: DiagnosticConclusion | null
+) {
+  if (health !== "ok") {
+    return [
+      {
+        fact: "Backend не отвечает на /health",
+        proves: "Проблема в самом приложении или локальном запуске backend.",
+      },
+    ];
+  }
+
+  if (state === "failed") {
+    return [
+      {
+        fact: "Frontend не смог получить /api/v1/status/overview",
+        proves: "Backend может быть запущен, но API недоступен для dashboard.",
+      },
+    ];
+  }
+
+  if (!overview?.latest_results.length) {
+    return [
+      {
+        fact: "Backend отвечает, но check results отсутствуют",
+        proves: "Само приложение работает; агент еще не отправил результаты мониторинга.",
+      },
+    ];
+  }
+
+  if (conclusion?.evidence.length) {
+    return conclusion.evidence.map((item) => ({
+      fact: item.message,
+      proves: `Источник: ${item.source}; вес evidence: ${item.weight}.`,
+    }));
+  }
+
+  const facts = [
+    {
+      fact: `Backend принял ${overview.latest_results.length} check results`,
+      proves: "Приложение работает, API ingestion и status overview доступны.",
+    },
+  ];
+
+  for (const result of sortChecks(results)) {
+    facts.push({
+      fact: `${result.check_type.toUpperCase()} ${result.status}: ${endpointAddress(result) ?? "адрес не указан"}`,
+      proves: factMeaning(result),
+    });
+  }
+
+  return facts;
+}
+
+function factMeaning(result: CheckResult) {
+  if (result.check_type === "dns" && result.status === "success") {
+    return "DNS resolver смог получить IP для этого hostname.";
+  }
+  if (result.check_type === "tcp" && result.status === "success") {
+    return "До адреса можно открыть TCP-соединение; путь через firewall/NAT/route не заблокирован для этого порта.";
+  }
+  if (result.check_type === "tls" && result.status === "success") {
+    return "TLS handshake и certificate validation прошли успешно.";
+  }
+  if (result.check_type === "http" && result.status === "success") {
+    return "Прикладной HTTP endpoint ответил, Zoom edge/application layer достижим.";
+  }
+  if (result.status === "skipped") {
+    return "Проверка не выполнялась, потому что предыдущий этап цепочки не прошел.";
+  }
+  return result.technical_description ?? result.error_type ?? "Есть технический сбой на этом этапе.";
+}
+
+function chainStepDescription(step: ChainStepResult, result: CheckResult) {
+  return step.description ?? result.technical_description ?? step.error_type ?? step.status;
+}
+
+function worstStep(candidates: Array<{ step: ChainStepResult; result: CheckResult }> | undefined) {
+  return worstStepWithResult(candidates)?.step;
+}
+
+function worstStepWithResult(candidates: Array<{ step: ChainStepResult; result: CheckResult }> | undefined) {
+  if (!candidates?.length) {
+    return null;
+  }
+  return [...candidates].sort((left, right) => severityRank(right.step.severity) - severityRank(left.step.severity))[0];
 }
 
 function endpointAddress(result: CheckResult) {
@@ -471,13 +596,16 @@ function serviceNameFor(serviceId: string): ServiceName {
 }
 
 function worstSeverity(current: Severity, next: Severity): Severity {
-  const rank: Record<Severity, number> = {
+  return severityRank(next) > severityRank(current) ? next : current;
+}
+
+function severityRank(severity: Severity) {
+  return {
     info: 0,
     unknown: 1,
     warning: 2,
     critical: 3,
-  };
-  return rank[next] > rank[current] ? next : current;
+  }[severity];
 }
 
 function formatConfidence(conclusion: DiagnosticConclusion | null) {
@@ -497,15 +625,96 @@ function buildSummary(
     return "Загружается live status overview из backend.";
   }
   if (state === "failed") {
-    return "Live status overview недоступен. Показаны fallback diagnostic data.";
+    return "Live status overview недоступен. Это проблема связи frontend с backend API.";
   }
   if (!overview || !result || !conclusion) {
-    return "Live incidents пока нет. Показаны fallback diagnostic data до отправки check results от agent.";
+    if (overview?.latest_results.length) {
+      return "Инцидентов нет. Последние checks успешно приняты backend, смотрите цепочку ниже по выбранному endpoint.";
+    }
+    return "Инцидентов и check results пока нет. Запустите агент, чтобы увидеть состояние Zoom endpoints.";
   }
 
   const failedStep = conclusion.failed_step ? chainLabel(conclusion.failed_step) : "unknown step";
   const location = conclusion.affected_locations[0] ?? result.location_id;
   return `${titleCase(spacesForUnderscores(result.service_id))} затронут из локации ${location}. Failed step: ${failedStep}; текущий diagnostic conclusion: ${conclusion.root_cause}.`;
+}
+
+function getMonitoringState(
+  health: HealthState,
+  state: LoadState,
+  overview: StatusOverview | null
+): MonitoringState {
+  if (health === "failed" || state === "failed") {
+    return "app_problem";
+  }
+  if (!overview?.latest_results.length) {
+    return "no_data";
+  }
+  if (overview.open_incidents > 0 || overview.latest_results.some((result) => result.severity === "critical")) {
+    return "critical";
+  }
+  if (overview.latest_results.some((result) => result.severity === "warning")) {
+    return "degraded";
+  }
+  return "healthy";
+}
+
+function stateTitle(state: MonitoringState) {
+  return {
+    app_problem: "Проблема с приложением",
+    no_data: "Приложение работает, но данных мониторинга нет",
+    healthy: "Zoom endpoints доступны из этой локации",
+    degraded: "Есть деградация",
+    critical: "Есть критическая проблема доступа",
+  }[state];
+}
+
+function stateDescription(state: MonitoringState, overview: StatusOverview | null, results: CheckResult[]) {
+  const endpoint = endpointLabel(results);
+  return {
+    app_problem: "Frontend или backend API не отвечают корректно.",
+    no_data: "Backend запущен. Нужно запустить агент, чтобы выполнить DNS/TCP/TLS/HTTP checks.",
+    healthy: `Проверки прошли успешно. Выбранный endpoint: ${endpoint}.`,
+    degraded: `Есть warning на одном из этапов. Выбранный endpoint: ${endpoint}.`,
+    critical: `Есть critical на одном из этапов. Адрес проблемного узла показан в цепочке ниже.`,
+  }[state];
+}
+
+function sourceLabel(state: MonitoringState) {
+  return {
+    app_problem: "Frontend/backend",
+    no_data: "Агент не запускался",
+    healthy: "Проблем не обнаружено",
+    degraded: "См. warning в цепочке",
+    critical: "См. critical узел в цепочке",
+  }[state];
+}
+
+function confidenceLabel(state: MonitoringState) {
+  return state === "healthy" ? "Confirmed by checks" : "Недостаточно данных";
+}
+
+function impactLabel(state: MonitoringState) {
+  return {
+    app_problem: "Dashboard недоступен",
+    no_data: "Неизвестно",
+    healthy: "Нет влияния",
+    degraded: "Среднее",
+    critical: "Высокое",
+  }[state];
+}
+
+function endpointLabel(results: CheckResult[]) {
+  const result = results[0];
+  if (!result) {
+    return "нет данных";
+  }
+  return `${endpointAddress(result) ?? "адрес не указан"}${result.endpoint_path ?? ""}`;
+}
+
+function sortChecks(results: CheckResult[]) {
+  const order = ["dns", "tcp", "tls", "http"];
+  return [...results].sort((left, right) => order.indexOf(left.check_type) - order.indexOf(right.check_type));
 }
 
 function chainLabel(step: string) {

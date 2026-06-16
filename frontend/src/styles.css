@@ -200,6 +200,12 @@ h2 {
   line-height: 1.35;
 }
 
+.step-address {
+  color: #172026 !important;
+  font-weight: 800;
+  overflow-wrap: anywhere;
+}
+
 .chain-step--info .dot,
 .status-dot--info {
   background: #1f9d55;
@@ -268,6 +274,41 @@ h2 {
   margin-bottom: 14px;
 }
 
+.state-banner {
+  display: grid;
+  gap: 6px;
+  margin-bottom: 14px;
+  padding: 13px 14px;
+  border: 1px solid #d9e1e5;
+  border-radius: 8px;
+  background: #f8fafb;
+}
+
+.state-banner strong {
+  font-size: 17px;
+}
+
+.state-banner span {
+  color: #52636d;
+  line-height: 1.45;
+}
+
+.state-banner--healthy {
+  border-color: #9ed6b3;
+  background: #f3fbf5;
+}
+
+.state-banner--critical,
+.state-banner--app_problem {
+  border-color: #efb0aa;
+  background: #fff5f3;
+}
+
+.state-banner--degraded {
+  border-color: #f0d083;
+  background: #fffaf0;
+}
+
 .conclusion > div {
   min-height: 76px;
   padding: 12px;
@@ -295,6 +336,20 @@ h2 {
   padding-left: 20px;
   color: #33434a;
   line-height: 1.65;
+}
+
+.evidence-list li {
+  margin-bottom: 10px;
+}
+
+.evidence-list strong {
+  display: block;
+  color: #172026;
+}
+
+.evidence-list span {
+  display: block;
+  color: #52636d;
 }
 
 @media (max-width: 980px) {
