@@ -1,0 +1,175 @@
+service_pack:
+  id: zoom
+  name: Zoom
+  version: 0.1.0
+  description: Initial Zoom service pack for network service dependency diagnostics.
+
+services:
+  - id: zoom_meeting
+    name: Zoom Meeting
+    criticality: critical
+    dependencies:
+      - service: zoom_auth
+        type: hard
+      - service: zoom_meeting_signaling
+        type: hard
+      - service: zoom_media
+        type: hard
+      - service: zoom_chat
+        type: soft
+      - service: zoom_recording
+        type: optional
+    journeys:
+      - join_meeting
+      - create_meeting
+
+  - id: zoom_auth
+    name: Zoom Auth Service
+    criticality: critical
+    dependencies: []
+    journeys:
+      - login
+
+  - id: zoom_meeting_signaling
+    name: Zoom Meeting Signaling
+    criticality: critical
+    dependencies: []
+    journeys: []
+
+  - id: zoom_media
+    name: Zoom Media Service
+    criticality: critical
+    dependencies: []
+    journeys: []
+
+  - id: zoom_chat
+    name: Zoom Chat
+    criticality: high
+    dependencies:
+      - service: zoom_auth
+        type: hard
+    journeys:
+      - open_chat
+
+  - id: zoom_recording
+    name: Zoom Recording
+    criticality: medium
+    dependencies:
+      - service: zoom_auth
+        type: hard
+    journeys: []
+
+endpoint_groups:
+  - id: zoom_web_api
+    service: zoom_auth
+    name: Zoom Web/API
+    purpose: api
+    protocol: https
+    checks:
+      - dns
+      - tcp
+      - tls
+      - http
+    endpoints:
+      - hostname: zoom.us
+        port: 443
+        path: /
+        expected_status: [200, 301, 302, 403]
+      - hostname: api.zoom.us
+        port: 443
+        path: /v2
+        expected_status: [200, 401, 403]
+
+  - id: zoom_meeting_signaling_https
+    service: zoom_meeting_signaling
+    name: Meeting Signaling HTTPS
+    purpose: signaling
+    protocol: https
+    checks:
+      - dns
+      - tcp
+      - tls
+      - http
+    endpoints:
+      - hostname: zoom.us
+        port: 443
+        path: /wc
+        expected_status: [200, 301, 302, 403, 404]
+
+  - id: zoom_media_udp
+    service: zoom_media
+    name: Meeting Media UDP
+    purpose: media
+    protocol: udp
+    checks:
+      - dns
+      - udp_media
+      - route
+    endpoints:
+      - hostname: zoom.us
+        ports: [3478, 3479, 8801, 8802]
+
+synthetic_journeys:
+  - id: login
+    name: Login
+    service: zoom_auth
+    criticality: critical
+    steps:
+      - check_group: zoom_web_api
+
+  - id: create_meeting
+    name: Create Meeting
+    service: zoom_meeting
+    criticality: high
+    steps:
+      - check_group: zoom_web_api
+      - check_group: zoom_meeting_signaling_https
+
+  - id: join_meeting
+    name: Join Meeting
+    service: zoom_meeting
+    criticality: critical
+    steps:
+      - check_group: zoom_web_api
+      - check_group: zoom_meeting_signaling_https
+      - check_group: zoom_media_udp
+
+  - id: open_chat
+    name: Open Chat
+    service: zoom_chat
+    criticality: medium
+    steps:
+      - check_group: zoom_web_api
+
+thresholds:
+  latency_ms:
+    warning: 150
+    critical: 300
+  packet_loss_ratio:
+    warning: 0.01
+    critical: 0.05
+  jitter_ms:
+    warning: 30
+    critical: 50
+
+diagnostic_recommendations:
+  dns_failure:
+    probable_cause: DNS resolver or split DNS issue
+    actions:
+      - Compare resolution from another resolver.
+      - Check corporate DNS forwarding rules.
+      - Validate resolver reachability from the affected agent.
+
+  tcp_timeout:
+    probable_cause: Firewall, proxy, NAT, or routing issue
+    actions:
+      - Check outbound firewall policy for destination host and port.
+      - Compare with an agent outside the corporate network.
+      - Run route diagnostics to the same endpoint.
+
+  tls_certificate_error:
+    probable_cause: TLS inspection, stale trust store, or endpoint certificate issue
+    actions:
+      - Check corporate TLS inspection policy.
+      - Validate the certificate chain from the affected agent.
+      - Compare the certificate issuer with a known-good network.
